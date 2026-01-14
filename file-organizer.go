@@ -227,7 +227,6 @@ func main() {
 
 	log.SetOutput(logFile)
 
-	// 3. Optional: Customize the log format (Date, Time, File name).
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
 	log.Println("File organizer starting...")
@@ -259,7 +258,6 @@ func main() {
 	log.Printf("Dump directory: %s", config.DumpDirectory)
 	log.Printf("Processing %d destination rules", len(config.Destinations))
 
-	// Organize existing files on startup
 	log.Println("Organizing existing files...")
 	if err := organizeFiles(config); err != nil {
 		log.Printf("Error organizing initial files: %v", err)
@@ -288,10 +286,8 @@ func main() {
 					organizer.timer.Stop()
 				}
 
-				// AfterFunc runs in its own goroutine automatically.
 				organizer.timer = time.AfterFunc(5*time.Second, func() {
 					log.Println("Timer expired, organizing files...")
-					// Note: organizeFiles must be a function call inside this closure
 					err := organizeFiles(config)
 					if err != nil {
 						log.Println(err)
@@ -322,7 +318,6 @@ func main() {
 	sig := <-sigChan
 	log.Printf("Received signal: %v. Shutting down gracefully...", sig)
 	
-	// Stop the timer if it's running
 	organizer.timerMu.Lock()
 	if organizer.timer != nil {
 		organizer.timer.Stop()
