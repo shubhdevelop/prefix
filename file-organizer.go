@@ -1,13 +1,16 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,8 +25,36 @@ type Destination struct {
 	Suffix string `yaml:"suffix,omitempty"`
 }
 
-func loadConfig(configPath string) (*Config, error) {
-	data, err := os.ReadFile(configPath)
+func loadConfig() (*Config, error) {
+	filename := ".prefix.yaml"
+	home, err := os.UserHomeDir()
+	configFileName := filepath.Join(home, filename)
+	if err != nil {
+		fmt.Printf("could not get home directory: %v\n", err)
+		return nil, err
+	}
+
+	file, err := os.Open(configFileName)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Printf("File not found: %s\n", configFileName)
+			// Handle file not existing (e.g., create it, exit)
+			return nil, err
+		} else {
+			// Handle other potential errors (e.g., permission denied)
+			fmt.Printf("Error opening file: %v\n", err)
+			return nil, err
+		}
+	}
+	defer func() {
+		closeErr := file.Close()
+		if err == nil {
+			err = closeErr // Capture close error if no other error occurred
+		}
+	}()
+	fmt.Printf("File exists and opened successfully: %s\n", configFileName)
+
+	data, err := os.ReadFile(configFileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -53,7 +84,7 @@ func matchesPattern(filename string, dest Destination) bool {
 func moveFile(sourcePath, destPath string) error {
 	// make sure destination directory exists
 	destDir := filepath.Dir(destPath)
-	if err := os.MkdirAll(destDir, 0755); err != nil {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
@@ -81,13 +112,22 @@ func copyFile(sourcePath, destPath string) error {
 	if err != nil {
 		return err
 	}
-	defer sourceFile.Close()
-
+	defer func() {
+		closeErr := sourceFile.Close()
+		if err == nil {
+			err = closeErr // Capture close error if no other error occurred
+		}
+	}()
 	destFile, err := os.Create(destPath)
 	if err != nil {
 		return err
 	}
-	defer destFile.Close()
+	defer func() {
+		closeErr := destFile.Close()
+		if err == nil {
+			err = closeErr // Capture close error if no other error occurred
+		}
+	}()
 
 	if _, err := io.Copy(destFile, sourceFile); err != nil {
 		return err
@@ -147,15 +187,10 @@ func organizeFiles(config *Config) error {
 	return nil
 }
 
+var timer *time.Timer
+
 func main() {
-	if len(os.Args) < 2 {
-		log.Fatal("Usage: file-organizer <config.yaml>")
-	}
-
-	configPath := os.Args[1]
-
-	log.Printf("Loading configuration from: %s", configPath)
-	config, err := loadConfig(configPath)
+	config, err := loadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -167,9 +202,52 @@ func main() {
 	log.Printf("Dump directory: %s", config.DumpDirectory)
 	log.Printf("Processing %d destination rules", len(config.Destinations))
 
-	if err := organizeFiles(config); err != nil {
-		log.Fatalf("Failed to organize files: %v", err)
-	}
+	watcher, _ := fsnotify.NewWatcher()
+	defer func() {
+		closeErr := watcher.Close()
+		if err == nil {
+			err = closeErr // Capture close error if no other error occurred
+		}
+	}()
 
-	log.Println("File organization completed!")
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				// Log everything to see what your editor is actually doing
+				log.Println(event)
+				// 2. DEBOUNCING LOGIC:
+				// If a timer is already running, stop it so we can restart the 5s countdown.
+				if timer != nil {
+					timer.Stop()
+				}
+
+				// 3. Start (or restart) the timer.
+				// AfterFunc runs in its own goroutine automatically.
+				timer = time.AfterFunc(5*time.Second, func() {
+					log.Println("Timer expired, organizing files...")
+					// Note: organizeFiles must be a function call inside this closure
+					err := organizeFiles(config)
+					if err != nil {
+						fmt.Println(err)
+					}
+				})
+
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Println("Error:", err)
+			}
+		}
+	}()
+
+	err = watcher.Add(config.DumpDirectory)
+	if err != nil {
+		fmt.Println(err)
+	}
+	select {}
 }
