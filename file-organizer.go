@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -37,36 +38,35 @@ func loadConfig() (*Config, error) {
 	}
 
 	file, err := os.Open(configFileName)
-	defer func() {
-		closeErr := file.Close()
-		if err == nil {
-			err = closeErr // Capture close error if no other error occurred
-		}
-	}()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			log.Printf("File not found: %s\n", configFileName)
 			log.Printf("Creating a new config file, add the dump and destinations")
 			// Handle file not existing (e.g., create it, exit)
 			newConfigFile, err := os.Create(configFileName)
-			defer func() {
-				closeErr := newConfigFile.Close()
-				if err == nil {
-					err = closeErr 
-				}
-			}()
 			if err != nil {
 				log.Fatalf("Error create new config file %e:", err)
-				return nil, err
 			}
+			defer newConfigFile.Close()
 
-		
+			// Write default config template
+			defaultConfig := `dump_directory: ""
+
+destinations:
+  - path: ""
+    prefix: ""
+    # suffix: ""
+`
+			if _, err := newConfigFile.WriteString(defaultConfig); err != nil {
+				log.Fatalf("Error writing default config: %v", err)
+			}
+			log.Printf("Created default config file at %s. Please edit it and restart the program.", configFileName)
+			return nil, fmt.Errorf("config file created, please configure it")
 		} else {
 			log.Fatalf("Error opening file: %v\n", err)
-			return nil, err
-		}
+			}
 	}
-
+	defer file.Close()
 
 	log.Printf("File exists and opened successfully: %s\n", configFileName)
 
@@ -109,7 +109,6 @@ func moveFile(sourcePath, destPath string) error {
 
 	if _, err := os.Stat(destPath); err == nil {
 		log.Printf("destination file already exists: %s", destPath)
-		log.Printf("destination file already exists: %s", destPath)
 		return fmt.Errorf("destination file already exists: %s", destPath)
 	}
 
@@ -132,38 +131,33 @@ func moveFile(sourcePath, destPath string) error {
 
 func copyFile(sourcePath, destPath string) error {
 	sourceFile, err := os.Open(sourcePath)
-	defer func() {
-		closeErr := sourceFile.Close()
-		if err == nil {
-			log.Printf("failed to close source file: %v", err)
-			err = closeErr
-		}
-	}()
 	if err != nil {
 		log.Printf("failed to open source file: %v", err)
 		return fmt.Errorf("failed to open source file: %w", err)
 	}
-
-	destFile, err := os.Create(destPath)
 	defer func() {
-		closeErr := destFile.Close()
-		if err == nil {
-			log.Printf("failed to close destination file: %v", err)
-			err = closeErr
+		if closeErr := sourceFile.Close(); closeErr != nil {
+			log.Printf("failed to close source file: %v", closeErr)
 		}
 	}()
+
+	destFile, err := os.Create(destPath)
 	if err != nil {
 		log.Printf("failed to create destination file: %v", err)
 		return fmt.Errorf("failed to create destination file: %w", err)
 	}
-	
+	defer func() {
+		if closeErr := destFile.Close(); closeErr != nil {
+			log.Printf("failed to close destination file: %v", closeErr)
+		}
+	}()
 
 	if _, err := io.Copy(destFile, sourceFile); err != nil {
-		return err
+		return fmt.Errorf("failed to copy file content: %w", err)
 	}
 
 	// Copy file permissions
-	sourceInfo, err :=	 os.Stat(sourcePath)
+	sourceInfo, err := os.Stat(sourcePath)
 	if err != nil {
 		log.Printf("failed to stat source file: %v", err)
 		return fmt.Errorf("failed to stat source file: %w", err)
@@ -218,7 +212,10 @@ func organizeFiles(config *Config) error {
 	return nil
 }
 
-var timer *time.Timer
+type fileOrganizer struct {
+	timer  *time.Timer
+	timerMu sync.Mutex
+}
 
 func main() {
 	logFile, err := os.OpenFile("app.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
@@ -233,11 +230,26 @@ func main() {
 	// 3. Optional: Customize the log format (Date, Time, File name).
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
-	// Now all log.Println calls go to app.log instead of the console.
-	log.Println("This message is written to the log file.")
+	log.Println("File organizer starting...")
 	config, err := loadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Validate config
+	if config.DumpDirectory == "" {
+		log.Fatalf("dump_directory is empty in config file")
+	}
+	if len(config.Destinations) == 0 {
+		log.Fatalf("no destinations configured")
+	}
+	for i, dest := range config.Destinations {
+		if dest.Path == "" {
+			log.Fatalf("destination[%d] has empty path", i)
+		}
+		if dest.Prefix == "" && dest.Suffix == "" {
+			log.Fatalf("destination[%d] must have at least prefix or suffix", i)
+		}
 	}
 
 	if _, err := os.Stat(config.DumpDirectory); os.IsNotExist(err) {
@@ -247,16 +259,19 @@ func main() {
 	log.Printf("Dump directory: %s", config.DumpDirectory)
 	log.Printf("Processing %d destination rules", len(config.Destinations))
 
+	// Organize existing files on startup
+	log.Println("Organizing existing files...")
+	if err := organizeFiles(config); err != nil {
+		log.Printf("Error organizing initial files: %v", err)
+	}
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatalf("Failed to create watcher: %v", err)
 	}
-	defer func() {
-		closeErr := watcher.Close()
-		if err == nil {
-			err = closeErr // Capture close error if no other error occurred
-		}
-	}()
+	defer watcher.Close()
+
+	organizer := &fileOrganizer{}
 
 	go func() {
 		for {
@@ -268,12 +283,13 @@ func main() {
 
 				log.Println(event)
 				// DEBOUNCING LOGIC:
-				if timer != nil {
-					timer.Stop()
+				organizer.timerMu.Lock()
+				if organizer.timer != nil {
+					organizer.timer.Stop()
 				}
 
 				// AfterFunc runs in its own goroutine automatically.
-				timer = time.AfterFunc(5*time.Second, func() {
+				organizer.timer = time.AfterFunc(5*time.Second, func() {
 					log.Println("Timer expired, organizing files...")
 					// Note: organizeFiles must be a function call inside this closure
 					err := organizeFiles(config)
@@ -281,6 +297,7 @@ func main() {
 						log.Println(err)
 					}
 				})
+				organizer.timerMu.Unlock()
 
 			case err, ok := <-watcher.Errors:
 				if !ok {
@@ -293,24 +310,25 @@ func main() {
 
 	err = watcher.Add(config.DumpDirectory)
 	if err != nil {
-		log.Println(err)
+		log.Fatalf("Failed to add watcher: %v", err)
 	}
 
-	// Set up signal handling for graceful shutdown
+	
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	log.Println("File organizer started. Press Ctrl+C to stop.")
-	
-	// Wait for interrupt signal
+
 	sig := <-sigChan
 	log.Printf("Received signal: %v. Shutting down gracefully...", sig)
 	
 	// Stop the timer if it's running
-	if timer != nil {
-		timer.Stop()
+	organizer.timerMu.Lock()
+	if organizer.timer != nil {
+		organizer.timer.Stop()
 		log.Println("Stopped file organization timer")
 	}
+	organizer.timerMu.Unlock()
 	
 	log.Println("File organizer stopped")
 }
