@@ -21,14 +21,15 @@ I propose a million dollar solution to add a prefix_ to the file being downloade
 - Prevents overwriting existing files
 - Detailed logging of all operations
 - Summary report after completion
-- Run as a background service on macOS
+- Run as a background service (macOS LaunchAgent / Linux systemd)
 - Automatic file watching
+- Cross-platform support (macOS and Linux)
 
 ---
 
 ## Installation
 
-### Homebrew (macOS - Recommended)
+### macOS - Homebrew (Recommended)
 
 If you have Homebrew installed, you can install `prefix` with:
 
@@ -57,7 +58,40 @@ cp $(brew --prefix)/share/prefix/config.example.yaml ~/.config/prefix/prefix.yam
 nano ~/.config/prefix/prefix.yaml
 ```
 
-### Manual Installation
+### Linux - Manual Installation
+
+1. **Download the binary from releases:**
+   ```bash
+   # For amd64
+   wget https://github.com/shubhdevelop/prefix/releases/latest/download/prefix-linux-amd64
+   chmod +x prefix-linux-amd64
+   sudo mv prefix-linux-amd64 /usr/local/bin/prefix
+   
+   # For arm64
+   wget https://github.com/shubhdevelop/prefix/releases/latest/download/prefix-linux-arm64
+   chmod +x prefix-linux-arm64
+   sudo mv prefix-linux-arm64 /usr/local/bin/prefix
+   ```
+
+2. **Or install to user directory:**
+   ```bash
+   mkdir -p ~/.local/bin
+   wget https://github.com/shubhdevelop/prefix/releases/latest/download/prefix-linux-amd64 -O ~/.local/bin/prefix
+   chmod +x ~/.local/bin/prefix
+   # Add ~/.local/bin to your PATH if not already
+   export PATH="$HOME/.local/bin:$PATH"
+   ```
+
+3. **Set up your config:**
+   ```bash
+   # Create config directory
+   mkdir -p ~/.config/prefix
+   
+   # Create config file (you'll need to create this manually or copy from example)
+   nano ~/.config/prefix/prefix.yaml
+   ```
+
+### Manual Installation (Build from Source)
 
 1. Make sure you have Go installed (version 1.21 or later)
 
@@ -68,7 +102,12 @@ go mod download
 
 3. Build the script:
 ```bash
+# For your current platform
 go build -o prefix prefix.go
+
+# Or cross-compile for specific platforms
+GOOS=linux GOARCH=amd64 go build -o prefix-linux-amd64 prefix.go
+GOOS=darwin GOARCH=amd64 go build -o prefix-macos-amd64 prefix.go
 ```
 
 ---
@@ -120,9 +159,11 @@ The program will:
 - Watch for new files and organize them automatically
 - Run until you press Ctrl+C
 
-### Running as a Background Service (macOS)
+### Running as a Background Service
 
 To run prefix as a background service that starts automatically on boot:
+
+**macOS:**
 
 1. **Install the service:**
    ```bash
@@ -151,6 +192,43 @@ The service will:
 - Start automatically when you log in
 - Restart automatically if it crashes
 - Log to `~/Library/Logs/prefix.log`
+- Run in the background without a terminal
+
+**Linux:**
+1. **Install the service:**
+   ```bash
+   prefix-service install
+   ```
+
+2. **Enable user services at boot (if not already enabled):**
+   ```bash
+   sudo loginctl enable-linger $(whoami)
+   ```
+
+3. **Check service status:**
+   ```bash
+   prefix-service status
+   ```
+
+4. **View logs:**
+   ```bash
+   prefix-service logs
+   # Or use journalctl directly:
+   journalctl --user -u prefix.service -f
+   ```
+
+5. **Manage the service:**
+   ```bash
+   prefix-service start    # Start the service
+   prefix-service stop     # Stop the service
+   prefix-service restart   # Restart the service
+   prefix-service uninstall # Remove the service
+   ```
+
+The service will:
+- Start automatically when you log in (if linger is enabled)
+- Restart automatically if it crashes
+- Log to `~/.config/prefix/prefix.log` and `~/.config/prefix/prefix.error.log`
 - Run in the background without a terminal
 
 **Note:** Make sure you've configured `~/.config/prefix/prefix.yaml` before installing the service.
@@ -241,17 +319,26 @@ If Full Disk Access is too broad, try:
 2. Check if RunAtLoad is set: `plutil -p ~/Library/LaunchAgents/com.prefix.plist | grep RunAtLoad`
 3. Manually test loading: `launchctl load -w ~/Library/LaunchAgents/com.prefix.plist`
 
-**macOS Version Compatibility:**
-The service script automatically handles both:
-- **macOS 10.11+**: Uses `launchctl bootstrap` / `launchctl bootout`
-- **Older macOS**: Uses `launchctl load` / `launchctl unload`
-
-The script detects which method to use automatically.
+**Platform Compatibility:**
+- **macOS**: Uses LaunchAgent (automatically detects bootstrap vs load methods)
+  - **macOS 10.11+**: Uses `launchctl bootstrap` / `launchctl bootout`
+  - **Older macOS**: Uses `launchctl load` / `launchctl unload`
+- **Linux**: Uses systemd user services
+  - Requires systemd (most modern Linux distributions)
+  - May require `loginctl enable-linger` for services to start at boot
 
 **Logs Location:**
+
+**macOS:**
 - **Standard output**: `~/Library/Logs/prefix.log` (LaunchAgent stdout)
 - **Standard error**: `~/Library/Logs/prefix.error.log` (LaunchAgent stderr)
 - **Application log**: `~/.config/prefix/app.log` (application log file)
+
+**Linux:**
+- **Standard output**: `~/.config/prefix/prefix.log` (systemd stdout)
+- **Standard error**: `~/.config/prefix/prefix.error.log` (systemd stderr)
+- **Application log**: `~/.config/prefix/app.log` (application log file)
+- **Systemd logs**: `journalctl --user -u prefix.service` (systemd journal)
 
 **Best Practices:**
 1. Test manually first: Always test your config by running `prefix` manually before installing as a service
@@ -726,6 +813,7 @@ Uses a build matrix to build for both macOS architectures.
 
 The workflow builds for:
 - **macOS**: amd64 (Intel), arm64 (Apple Silicon/M1/M2/M3)
+- **Linux**: amd64, arm64
 
 #### Triggers
 
@@ -753,7 +841,7 @@ The workflows run on:
    ```
 
 2. GitHub Actions will:
-   - Build macOS binaries (Intel and Apple Silicon)
+   - Build binaries for macOS (Intel and Apple Silicon) and Linux (amd64 and arm64)
    - Generate SHA256 checksums
    - Create a GitHub Release
    - Attach all binaries and checksums to the release
@@ -784,19 +872,21 @@ The builds use these optimizations:
 
 Binaries are named as:
 ```
-prefix-macos-{arch}
+prefix-{os}-{arch}
 ```
 
 Examples:
 - `prefix-macos-amd64` (Intel Macs)
 - `prefix-macos-arm64` (Apple Silicon: M1, M2, M3)
+- `prefix-linux-amd64` (Linux x86_64)
+- `prefix-linux-arm64` (Linux ARM64)
 
 #### Requirements
 
 No setup needed! The workflow:
 - Set up Go automatically
 - Download dependencies
-- Build for both macOS architectures
+- Build for macOS and Linux (multiple architectures)
 - Upload artifacts
 
 #### Permissions
@@ -807,12 +897,12 @@ The workflow requires `contents: write` permission to create releases. This is a
 
 **Adding More Platforms:**
 
-To add Linux or Windows builds, add to the matrix in `build.yaml`:
+To add Windows or other platforms, add to the matrix in `build.yaml`:
 ```yaml
 - arch: amd64
-  goos: linux
+  goos: windows
   goarch: amd64
-  output: prefix-linux-amd64
+  output: prefix-windows-amd64.exe
 ```
 
 **Changing Go Version:**
