@@ -64,7 +64,7 @@ destinations:
 			return nil, fmt.Errorf("config file created, please configure it")
 		} else {
 			log.Fatalf("Error opening file: %v\n", err)
-			}
+		}
 	}
 	defer file.Close()
 
@@ -213,7 +213,7 @@ func organizeFiles(config *Config) error {
 }
 
 type fileOrganizer struct {
-	timer  *time.Timer
+	timer   *time.Timer
 	timerMu sync.Mutex
 }
 
@@ -309,7 +309,6 @@ func main() {
 		log.Fatalf("Failed to add watcher: %v", err)
 	}
 
-	
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -317,13 +316,13 @@ func main() {
 
 	sig := <-sigChan
 	log.Printf("Received signal: %v. Shutting down gracefully...", sig)
-	
+
 	organizer.timerMu.Lock()
 	if organizer.timer != nil {
 		organizer.timer.Stop()
 		log.Println("Stopped file organization timer")
 	}
 	organizer.timerMu.Unlock()
-	
+
 	log.Println("File organizer stopped")
 }
