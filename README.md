@@ -211,6 +211,28 @@ This stops and removes the LaunchAgent. The binary and config file remain instal
 2. Verify dump directory exists in your `~/.prefix.yaml` config
 3. Check permissions for dump and destination directories
 
+**"Operation not permitted" error (macOS):**
+If you see errors like `operation not permitted` when accessing Desktop, Downloads, or Documents folders, you need to grant macOS permissions:
+
+**For Service (prefix-service):**
+1. Open **System Settings** → **Privacy & Security** → **Full Disk Access**
+2. Click the **+** button
+3. Press `Cmd+Shift+G` and paste: `/opt/homebrew/Cellar/prefix/0.1.1/bin/prefix`
+   - Or find it by running: `readlink -f $(which prefix)`
+4. Add it and enable the toggle
+5. Restart the service: `prefix-service restart`
+
+**For Terminal/Manual Run:**
+1. Open **System Settings** → **Privacy & Security** → **Full Disk Access**
+2. Add **Terminal** (or iTerm, etc.) and enable the toggle
+3. Restart Terminal and try again
+
+**Alternative (Files and Folders access):**
+If Full Disk Access is too broad, try:
+1. **System Settings** → **Privacy & Security** → **Files and Folders**
+2. Find Terminal (or your terminal app)
+3. Enable **Desktop Folder** access
+
 **Service doesn't start on boot:**
 1. Verify the plist exists: `ls -la ~/Library/LaunchAgents/com.prefix.plist`
 2. Check if RunAtLoad is set: `plutil -p ~/Library/LaunchAgents/com.prefix.plist | grep RunAtLoad`

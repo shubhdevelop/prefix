@@ -26,7 +26,7 @@ class Prefix < Formula
     pkgshare.install "config.example.yaml"
     
     # Install service management script
-    bin.install "prefix-service.sh" => "prefix-service"
+    bin.install "scripts/prefix-service.sh" => "prefix-service"
   end
 
   test do

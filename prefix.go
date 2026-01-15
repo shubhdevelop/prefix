@@ -29,14 +29,13 @@ type Destination struct {
 }
 
 func loadConfig() (*Config, error) {
-	filename := ".prefix.yaml"
 	home, err := os.UserHomeDir()
-	configFileName := filepath.Join(home, filename)
 	if err != nil {
 		log.Printf("could not get home directory: %v\n", err)
-		return nil, err
+		return nil, fmt.Errorf("could not get home directory: %w", err)
 	}
 
+	configFileName := filepath.Join(home, ".config", "prefix", "prefix.yaml")
 	file, err := os.Open(configFileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -218,9 +217,15 @@ type fileOrganizer struct {
 }
 
 func main() {
-	logFile, err := os.OpenFile("app.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
+	home, err := os.UserHomeDir()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("could not get home directory: %v", err)
+	}
+
+	logFilePath := filepath.Join(home, ".config", "prefix", "app.log")
+	logFile, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
+	if err != nil {
+		log.Fatalf("failed to open log file: %v", err)
 	}
 
 	defer logFile.Close()
